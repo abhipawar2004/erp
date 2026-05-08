@@ -54,6 +54,12 @@ async def create_order(order: OrderCreate, db: AsyncSession = Depends(get_db)):
                 )
 
             # Validate stock availability
+            if product.stock == 0:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Product {product.name} is out of stock",
+                )
+
             if product.stock < item.quantity:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
