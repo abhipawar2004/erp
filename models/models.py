@@ -3,7 +3,7 @@ from sqlalchemy.orm import declarative_base, relationship
 import enum
 
 Base = declarative_base()
-
+    
 
 class Product(Base):
     __tablename__ = "products"
