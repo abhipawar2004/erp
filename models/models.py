@@ -52,3 +52,8 @@ class OrderItem(Base):
     # Relationships
     order = relationship("Order", back_populates="order_items")
     product = relationship("Product", back_populates="order_items")
+
+    @property
+    def product_name(self):
+        """Return product name from the related product"""
+        return self.product.name if self.product else None

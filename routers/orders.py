@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import selectinload, joinedload
 from decimal import Decimal
 
 from models.models import Order, OrderItem, Product, OrderStatus
@@ -10,7 +10,7 @@ from src.dependencies import get_db
 
 router = APIRouter(prefix="/api/orders", tags=["orders"])
 
-
+    
 @router.post("", response_model=OrderResponse, status_code=status.HTTP_201_CREATED)
 async def create_order(order: OrderCreate, db: AsyncSession = Depends(get_db)):
     """Create a new order with inventory stock validation and reduction"""
@@ -101,7 +101,7 @@ async def create_order(order: OrderCreate, db: AsyncSession = Depends(get_db)):
         result = await db.execute(
             select(Order)
             .where(Order.id == new_order.id)
-            .options(selectinload(Order.order_items))
+            .options(selectinload(Order.order_items).joinedload(OrderItem.product))
         )
         created_order = result.scalars().first()
 
@@ -123,7 +123,7 @@ async def get_all_orders(db: AsyncSession = Depends(get_db)):
     """Get all orders"""
     try:
         result = await db.execute(
-            select(Order).options(selectinload(Order.order_items))
+            select(Order).options(selectinload(Order.order_items).joinedload(OrderItem.product))
         )
         orders = result.unique().scalars().all()
         return orders
@@ -141,7 +141,7 @@ async def get_order(order_id: int, db: AsyncSession = Depends(get_db)):
         result = await db.execute(
             select(Order)
             .where(Order.id == order_id)
-            .options(selectinload(Order.order_items))
+            .options(selectinload(Order.order_items).joinedload(OrderItem.product))
         )
         order = result.scalars().first()
 
@@ -198,7 +198,7 @@ async def update_order_status(
         result = await db.execute(
             select(Order)
             .where(Order.id == order.id)
-            .options(selectinload(Order.order_items))
+            .options(selectinload(Order.order_items).joinedload(OrderItem.product))
         )
         updated_order = result.scalars().first()
 
@@ -262,7 +262,7 @@ async def cancel_order(order_id: int, db: AsyncSession = Depends(get_db)):
         result = await db.execute(
             select(Order)
             .where(Order.id == order.id)
-            .options(selectinload(Order.order_items))
+            .options(selectinload(Order.order_items).joinedload(OrderItem.product))
         )
         cancelled_order = result.scalars().first()
 

@@ -132,3 +132,31 @@ async def deactivate_product(product_id: int, db: AsyncSession = Depends(get_db)
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Failed to deactivate product: {str(e)}",
         )
+
+
+@router.patch("/{product_id}/activate", response_model=ProductResponse)
+async def activate_product(product_id: int, db: AsyncSession = Depends(get_db)):
+    """Activate a product"""
+    try:
+        result = await db.execute(select(Product).where(Product.id == product_id))
+        product = result.scalars().first()
+
+        if not product:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Product not found",
+            )
+
+        product.is_active = True
+        db.add(product)
+        await db.commit()
+        await db.refresh(product)
+        return product
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to activate product: {str(e)}",
+        )
