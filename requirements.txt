@@ -1,0 +1,6 @@
+fastapi
+sqlalchemy
+asyncmy
+pydantic
+pydantic-settings
+python-dotenv
