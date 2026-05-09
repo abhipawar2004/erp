@@ -10,6 +10,38 @@ from src.dependencies import get_db
 
 router = APIRouter(prefix="/api/orders", tags=["orders"])
 
+
+async def adjust_stock(order, db, restore=False):
+    """Adjust product stock for an order based on the requested transition."""
+    for order_item in order.order_items:
+        result = await db.execute(
+            select(Product).where(Product.id == order_item.product_id)
+        )
+        product = result.scalars().first()
+
+        if not product:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Product with ID {order_item.product_id} not found",
+            )
+
+        if restore:
+            # Restoring stock is used when an order moves into CANCELLED.
+            product.stock += order_item.quantity
+        else:
+            # Re-reserving stock is used when an order leaves CANCELLED.
+            if product.stock < order_item.quantity:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        f"Insufficient stock for product {product.name}. "
+                        f"Available: {product.stock}, Requested: {order_item.quantity}"
+                    ),
+                )
+            product.stock -= order_item.quantity
+
+        db.add(product)
+
     
 @router.post("", response_model=OrderResponse, status_code=status.HTTP_201_CREATED)
 async def create_order(order: OrderCreate, db: AsyncSession = Depends(get_db)):
@@ -172,9 +204,11 @@ async def update_order_status(
 ):
     """Update order status"""
     try:
-        # Validate status
+        requested_status = status_update.status.strip().upper()
         valid_statuses = [status.value for status in OrderStatus]
-        if status_update.status not in valid_statuses:
+
+        # Validate the requested status before applying any inventory changes.
+        if requested_status not in OrderStatus.__members__:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Invalid status. Allowed values: {', '.join(valid_statuses)}",
@@ -194,8 +228,24 @@ async def update_order_status(
                 detail="Order not found",
             )
 
+        current_status = order.status.value
+        if current_status == requested_status:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Order is already in the requested status",
+            )
+
+        # Transition-based inventory management:
+        # - moving into CANCELLED restores stock once
+        # - moving out of CANCELLED reserves stock again
+        # - transitions between active statuses do not change stock
+        if current_status != OrderStatus.CANCELLED.value and requested_status == OrderStatus.CANCELLED.value:
+            await adjust_stock(order, db, restore=True)
+        elif current_status == OrderStatus.CANCELLED.value and requested_status != OrderStatus.CANCELLED.value:
+            await adjust_stock(order, db, restore=False)
+
         # Update status
-        order.status = OrderStatus[status_update.status]
+        order.status = OrderStatus[requested_status]
         db.add(order)
         await db.commit()
         await db.refresh(order)
@@ -221,58 +271,13 @@ async def update_order_status(
 
 @router.patch("/{order_id}/cancel", response_model=OrderResponse)
 async def cancel_order(order_id: int, db: AsyncSession = Depends(get_db)):
-    """Cancel an order and restore product stock"""
+    """Cancel an order using the shared status transition handler."""
     try:
-        # Fetch order with items
-        result = await db.execute(
-            select(Order)
-            .where(Order.id == order_id)
-            .options(selectinload(Order.order_items))
+        return await update_order_status(
+            order_id,
+            OrderStatusUpdate(status=OrderStatus.CANCELLED.value),
+            db,
         )
-        order = result.scalars().first()
-
-        if not order:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Order not found",
-            )
-
-        # Check if already cancelled
-        if order.status == OrderStatus.CANCELLED:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Order is already cancelled",
-            )
-
-        # Restore stock for each order item
-        for order_item in order.order_items:
-            # Fetch product
-            result = await db.execute(
-                select(Product).where(Product.id == order_item.product_id)
-            )
-            product = result.scalars().first()
-
-            if product:
-                product.stock += order_item.quantity
-                db.add(product)
-
-        # Update order status to CANCELLED
-        order.status = OrderStatus.CANCELLED
-        db.add(order)
-
-        # Commit transaction
-        await db.commit()
-        await db.refresh(order)
-
-        # Reload with relationships
-        result = await db.execute(
-            select(Order)
-            .where(Order.id == order.id)
-            .options(selectinload(Order.order_items).joinedload(OrderItem.product))
-        )
-        cancelled_order = result.scalars().first()
-
-        return cancelled_order
     except HTTPException:
         await db.rollback()
         raise
